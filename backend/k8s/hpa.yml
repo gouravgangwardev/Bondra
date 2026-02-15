@@ -1,0 +1,275 @@
+# ============================================
+# FILE 3: k8s/hpa.yml
+# ============================================
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: random-chat-hpa
+  namespace: random-chat
+  labels:
+    app: random-chat
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: random-chat-app
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    # CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    
+    # Custom metrics (if using Prometheus adapter)
+    - type: Pods
+      pods:
+        metric:
+          name: websocket_connections_total
+        target:
+          type: AverageValue
+          averageValue: "100"
+    
+    - type: Pods
+      pods:
+        metric:
+          name: queue_size_total
+        target:
+          type: AverageValue
+          averageValue: "50"
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+      selectPolicy: Max
+
+---
+# Vertical Pod Autoscaler (optional)
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: random-chat-vpa
+  namespace: random-chat
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: random-chat-app
+  updatePolicy:
+    updateMode: "Auto"
+  resourcePolicy:
+    containerPolicies:
+      - containerName: app
+        minAllowed:
+          cpu: 250m
+          memory: 256Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 2Gi
+
+---
+# Pod Disruption Budget
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: random-chat-pdb
+  namespace: random-chat
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: random-chat
+      component: backend
+
+---
+# Network Policy (optional - for security)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: random-chat-network-policy
+  namespace: random-chat
+spec:
+  podSelector:
+    matchLabels:
+      app: random-chat
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic from ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Allow traffic from within namespace
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 3000
+        - protocol: TCP
+          port: 9090
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+    # Allow PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Allow Redis
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow external HTTPS (for webhooks, etc.)
+    - to:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# Ingress (Nginx Ingress Controller)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: random-chat-ingress
+  namespace: random-chat
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/websocket-services: random-chat-service
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+spec:
+  tls:
+    - hosts:
+        - api.yourdomain.com
+      secretName: random-chat-tls
+  rules:
+    - host: api.yourdomain.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: random-chat-service
+                port:
+                  number: 80
+
+---
+# Service Monitor (for Prometheus Operator)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: random-chat-metrics
+  namespace: random-chat
+  labels:
+    app: random-chat
+spec:
+  selector:
+    matchLabels:
+      app: random-chat
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+
+---
+# PrometheusRule (Alert Rules)
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: random-chat-alerts
+  namespace: random-chat
+  labels:
+    app: random-chat
+spec:
+  groups:
+    - name: random-chat
+      interval: 30s
+      rules:
+        - alert: HighErrorRate
+          expr: rate(errors_total[5m]) > 10
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate detected"
+            description: "Error rate is {{ $value }} errors/sec"
+        
+        - alert: HighCPUUsage
+          expr: rate(process_cpu_seconds_total[5m]) > 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU usage"
+            description: "CPU usage is {{ $value }}"
+        
+        - alert: PodDown
+          expr: up{job="random-chat"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod is down"
+            description: "Pod {{ $labels.instance }} is down"
+        
+        - alert: LargeQueueSize
+          expr: queue_size > 100
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Large queue size"
+            description: "Queue has {{ $value }} users waiting"
