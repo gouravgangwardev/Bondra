@@ -42,16 +42,16 @@
     "typescript",
     "nodejs"
   ],
-  "author": "Your Name <your.email@example.com>",
+  "author": "Gourav Gangwar <gouravgangwar.dev@gmail.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yourusername/random-chat-backend.git"
+    "url": "https://github.com/gouravgangwardev/Bondra.git"
   },
   "bugs": {
-    "url": "https://github.com/yourusername/random-chat-backend/issues"
+    "url": "https://github.com/gouravgangwardev/Bondra/issues"
   },
-  "homepage": "https://github.com/yourusername/random-chat-backend#readme",
+  "homepage": "https://github.com/gouravgangwardev/Bondra#readme",
   "engines": {
     "node": ">=20.0.0",
     "npm": ">=9.0.0"
