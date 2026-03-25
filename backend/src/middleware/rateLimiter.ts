@@ -1,5 +1,5 @@
 // ============================================
-// FILE 2: src/middleware/rateLimiter.ts
+// FILE: src/middleware/rateLimiter.ts (IMPROVED VERSION)
 // ============================================
 import rateLimit from 'express-rate-limit';
 import RedisStore from 'rate-limit-redis';
@@ -7,7 +7,31 @@ import { redisClient } from '../config/redis';
 import { ENV } from '../config/environment';
 import { HTTP_STATUS, ERROR_CODES } from '../config/constants';
 
+// ============================================
+// ✅ NEW: Chat message rate limiter
+// ============================================
+export const chatLimiter = rateLimit({
+  store: new RedisStore({
+    sendCommand: (...args: string[]) => redisClient.call(...args),
+    prefix: 'ratelimit:chat:',
+  }),
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 60, // 60 messages per minute
+  message: {
+    success: false,
+    error: ERROR_CODES.RATE_LIMIT_EXCEEDED,
+    message: 'Too many messages, please slow down',
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: any) => {
+    return req.user?.userId || req.ip;
+  },
+});
+
+// ============================================
 // General API rate limiter
+// ============================================
 export const apiLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args: string[]) => redisClient.call(...args),
@@ -26,7 +50,9 @@ export const apiLimiter = rateLimit({
   skipFailedRequests: false,
 });
 
+// ============================================
 // Strict rate limiter for auth endpoints
+// ============================================
 export const authLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args: string[]) => redisClient.call(...args),
@@ -39,11 +65,13 @@ export const authLimiter = rateLimit({
     error: ERROR_CODES.RATE_LIMIT_EXCEEDED,
     message: 'Too many login attempts, please try again after 15 minutes',
   },
-  skipSuccessfulRequests: true, // Don't count successful logins
+  skipSuccessfulRequests: true,
   skipFailedRequests: false,
 });
 
+// ============================================
 // Report rate limiter
+// ============================================
 export const reportLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args: string[]) => redisClient.call(...args),
@@ -61,7 +89,9 @@ export const reportLimiter = rateLimit({
   },
 });
 
+// ============================================
 // Friend request rate limiter
+// ============================================
 export const friendRequestLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args: string[]) => redisClient.call(...args),
@@ -79,7 +109,9 @@ export const friendRequestLimiter = rateLimit({
   },
 });
 
+// ============================================
 // IP-based rate limiter (for public endpoints)
+// ============================================
 export const ipLimiter = rateLimit({
   store: new RedisStore({
     sendCommand: (...args: string[]) => redisClient.call(...args),
@@ -94,7 +126,9 @@ export const ipLimiter = rateLimit({
   },
 });
 
-// Create custom rate limiter
+// ============================================
+// Create custom rate limiter factory
+// ============================================
 export const createRateLimiter = (options: {
   windowMs: number;
   max: number;
