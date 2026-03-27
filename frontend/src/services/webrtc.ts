@@ -1,12 +1,28 @@
 // src/services/webrtc.ts
 import { socketService } from './socket';
 
+const TURN_SERVER   = import.meta.env.VITE_TURN_SERVER_URL;
+const TURN_USERNAME = import.meta.env.VITE_TURN_USERNAME;
+const TURN_CREDENTIAL = import.meta.env.VITE_TURN_CREDENTIAL;
+
 const ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    // TURN server — required for users behind symmetric NAT (~20% of connections).
+    // Set VITE_TURN_* in your .env. Free tier: https://www.metered.ca/tools/openrelay/
+    ...(TURN_SERVER
+      ? [
+          {
+            urls: TURN_SERVER,
+            username: TURN_USERNAME,
+            credential: TURN_CREDENTIAL,
+          },
+        ]
+      : []),
   ],
+  iceCandidatePoolSize: 10,
 };
 
 export type MediaMode = 'video' | 'audio';
