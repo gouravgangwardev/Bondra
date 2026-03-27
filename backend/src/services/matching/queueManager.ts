@@ -39,7 +39,7 @@ export class QueueManager {
       };
 
       await redisClient.set(
-        `${REDIS_KEYS.QUEUE_VIDEO}:user:${userId}`,
+        `queue:user:${userId}`,
         JSON.stringify(userData),
         'EX',
         120 // 2 minutes expiry
@@ -77,7 +77,7 @@ export class QueueManager {
       const removed = await redisClient.zrem(queueKey, userId);
 
       // Remove user data
-      await redisClient.del(`${REDIS_KEYS.QUEUE_VIDEO}:user:${userId}`);
+      await redisClient.del(`queue:user:${userId}`);
 
       // Update metrics
       const queueSize = await this.getQueueSize(queueType);
@@ -162,7 +162,7 @@ export class QueueManager {
   // Get user data from Redis
   async getUserData(userId: string): Promise<IQueueUser | null> {
     try {
-      const data = await redisClient.get(`${REDIS_KEYS.QUEUE_VIDEO}:user:${userId}`);
+      const data = await redisClient.get(`queue:user:${userId}`);
       if (!data) return null;
 
       return JSON.parse(data);
@@ -325,6 +325,19 @@ export class QueueManager {
         return REDIS_KEYS.QUEUE_TEXT;
       default:
         return REDIS_KEYS.QUEUE_VIDEO;
+    }
+  }
+
+  // Get the oldest waiting user in a queue (used by background pairing loop)
+  async getOldestInQueue(queueType: SessionType): Promise<IQueueUser | null> {
+    try {
+      const queueKey = this.getQueueKey(queueType);
+      const users = await redisClient.zrange(queueKey, 0, 0);
+      if (!users.length) return null;
+      return this.getUserData(users[0]);
+    } catch (error) {
+      logger.error('Error getting oldest in queue:', error);
+      return null;
     }
   }
 
