@@ -16,6 +16,9 @@ import FriendController from './controllers/friendController';
 import ReportController from './controllers/reportController';
 import HealthController from './controllers/healthController';
 
+// Import middleware
+import { authMiddleware } from './middleware/authMiddleware';
+
 class App {
   public app: Application;
 
@@ -116,37 +119,37 @@ class App {
     this.app.post(`${API_PREFIX}/auth/logout`, AuthController.logout);
     this.app.post(`${API_PREFIX}/auth/verify`, AuthController.verifyToken);
 
-    // User routes
+    // User routes (search / active-count / check-username are public)
     this.app.get(`${API_PREFIX}/users/search`, UserController.searchUsers);
     this.app.get(`${API_PREFIX}/users/active-count`, UserController.getActiveUsersCount);
     this.app.get(`${API_PREFIX}/users/check-username`, UserController.checkUsername);
-    this.app.get(`${API_PREFIX}/users/:userId`, UserController.getUserProfile);
-    this.app.put(`${API_PREFIX}/users/profile`, UserController.updateProfile);
-    this.app.get(`${API_PREFIX}/users/stats`, UserController.getUserStats);
+    this.app.get(`${API_PREFIX}/users/:userId`, authMiddleware, UserController.getUserProfile);
+    this.app.put(`${API_PREFIX}/users/profile`, authMiddleware, UserController.updateProfile);
+    this.app.get(`${API_PREFIX}/users/stats`, authMiddleware, UserController.getUserStats);
 
-    // Friend routes
-    this.app.post(`${API_PREFIX}/friends/request`, FriendController.sendFriendRequest);
-    this.app.post(`${API_PREFIX}/friends/accept`, FriendController.acceptFriendRequest);
-    this.app.post(`${API_PREFIX}/friends/reject`, FriendController.rejectFriendRequest);
-    this.app.delete(`${API_PREFIX}/friends/:friendId`, FriendController.removeFriend);
-    this.app.post(`${API_PREFIX}/friends/block`, FriendController.blockUser);
-    this.app.delete(`${API_PREFIX}/friends/unblock/:friendId`, FriendController.unblockUser);
-    this.app.get(`${API_PREFIX}/friends`, FriendController.getFriendList);
-    this.app.get(`${API_PREFIX}/friends/pending`, FriendController.getPendingRequests);
-    this.app.get(`${API_PREFIX}/friends/sent`, FriendController.getSentRequests);
-    this.app.get(`${API_PREFIX}/friends/online`, FriendController.getOnlineFriends);
-    this.app.get(`${API_PREFIX}/friends/stats`, FriendController.getFriendStats);
-    this.app.get(`${API_PREFIX}/friends/suggestions`, FriendController.getFriendSuggestions);
-    this.app.get(`${API_PREFIX}/friends/:friendId/status`, FriendController.getFriendshipStatus);
+    // Friend routes (all protected)
+    this.app.post(`${API_PREFIX}/friends/request`, authMiddleware, FriendController.sendFriendRequest);
+    this.app.post(`${API_PREFIX}/friends/accept`, authMiddleware, FriendController.acceptFriendRequest);
+    this.app.post(`${API_PREFIX}/friends/reject`, authMiddleware, FriendController.rejectFriendRequest);
+    this.app.delete(`${API_PREFIX}/friends/:friendId`, authMiddleware, FriendController.removeFriend);
+    this.app.post(`${API_PREFIX}/friends/block`, authMiddleware, FriendController.blockUser);
+    this.app.delete(`${API_PREFIX}/friends/unblock/:friendId`, authMiddleware, FriendController.unblockUser);
+    this.app.get(`${API_PREFIX}/friends`, authMiddleware, FriendController.getFriendList);
+    this.app.get(`${API_PREFIX}/friends/pending`, authMiddleware, FriendController.getPendingRequests);
+    this.app.get(`${API_PREFIX}/friends/sent`, authMiddleware, FriendController.getSentRequests);
+    this.app.get(`${API_PREFIX}/friends/online`, authMiddleware, FriendController.getOnlineFriends);
+    this.app.get(`${API_PREFIX}/friends/stats`, authMiddleware, FriendController.getFriendStats);
+    this.app.get(`${API_PREFIX}/friends/suggestions`, authMiddleware, FriendController.getFriendSuggestions);
+    this.app.get(`${API_PREFIX}/friends/:friendId/status`, authMiddleware, FriendController.getFriendshipStatus);
 
-    // Report routes
-    this.app.post(`${API_PREFIX}/reports`, ReportController.submitReport);
-    this.app.get(`${API_PREFIX}/reports`, ReportController.getAllReports);
-    this.app.get(`${API_PREFIX}/reports/my`, ReportController.getMyReports);
-    this.app.get(`${API_PREFIX}/reports/pending-count`, ReportController.getPendingCount);
-    this.app.get(`${API_PREFIX}/reports/recent`, ReportController.getRecentReports);
-    this.app.get(`${API_PREFIX}/reports/stats`, ReportController.getReportStats);
-    this.app.get(`${API_PREFIX}/reports/:reportId`, ReportController.getReportDetails);
+    // Report routes (all protected)
+    this.app.post(`${API_PREFIX}/reports`, authMiddleware, ReportController.submitReport);
+    this.app.get(`${API_PREFIX}/reports`, authMiddleware, ReportController.getAllReports);
+    this.app.get(`${API_PREFIX}/reports/my`, authMiddleware, ReportController.getMyReports);
+    this.app.get(`${API_PREFIX}/reports/pending-count`, authMiddleware, ReportController.getPendingCount);
+    this.app.get(`${API_PREFIX}/reports/recent`, authMiddleware, ReportController.getRecentReports);
+    this.app.get(`${API_PREFIX}/reports/stats`, authMiddleware, ReportController.getReportStats);
+    this.app.get(`${API_PREFIX}/reports/:reportId`, authMiddleware, ReportController.getReportDetails);
 
     // Health & monitoring routes
     this.app.get(`${API_PREFIX}/health/system`, HealthController.getSystemStats);
