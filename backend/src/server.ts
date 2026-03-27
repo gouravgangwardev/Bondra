@@ -12,6 +12,7 @@ import LoadBalancer from './services/matching/loadBalancer';
 import pairingEngine from './services/matching/pairingEngine';
 import sessionManager from './services/matching/sessionManager';
 import queueManager from './services/matching/queueManager';
+import { initializeSocketHandlers } from './socket/index';
 
 class Server {
   private httpServer: http.Server;
@@ -75,24 +76,15 @@ class Server {
       
       logger.info('✓ Socket.IO Redis adapter configured');
 
-      // WebSocket connection handler (we'll implement handlers later)
-      this.io.on('connection', (socket) => {
-        logger.debug(`WebSocket connection: ${socket.id}`);
-        
-        // Update load balancer connection count
-        this.loadBalancer.updateConnectionCount(this.io.sockets.sockets.size);
+      // Wire all Socket.IO handlers (auth middleware + match/webrtc/chat/friend)
+      initializeSocketHandlers(this.io);
 
-        // Disconnect handler
+      // Keep load balancer connection count in sync
+      this.io.on('connection', (socket) => {
+        this.loadBalancer.updateConnectionCount(this.io.sockets.sockets.size);
         socket.on('disconnect', () => {
-          logger.debug(`WebSocket disconnected: ${socket.id}`);
           this.loadBalancer.updateConnectionCount(this.io.sockets.sockets.size);
         });
-
-        // TODO: Import and initialize WebSocket handlers here
-        // Example:
-        // chatHandler(socket, this.io);
-        // matchHandler(socket, this.io);
-        // friendHandler(socket, this.io);
       });
 
       logger.info('✓ Socket.IO initialized');
