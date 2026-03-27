@@ -79,9 +79,43 @@ export class PairingEngine {
   // Match the two oldest users in queue
   private async matchOldestUsers(queueType: SessionType): Promise<void> {
     try {
-      // This would typically be triggered by WebSocket handler
-      // Here we just ensure the queue is being processed
-      logger.debug(`Processing ${queueType} queue for matches`);
+      // Get the oldest user in the queue
+      const user1 = await queueManager.getOldestInQueue(queueType);
+      if (!user1) return;
+
+      // Try to find them a partner (atomic lock inside findMatch)
+      const partner = await queueManager.findMatch(user1.userId, queueType);
+      if (!partner) return;
+
+      // Create session in Redis + Postgres
+      const session = await sessionManager.createSession(
+        queueType,
+        user1.userId,
+        partner.userId
+      );
+
+      if (!session) {
+        // Re-add both users so they get another attempt
+        await queueManager.addToQueue(user1.userId, user1.socketId, queueType);
+        await queueManager.addToQueue(partner.userId, partner.socketId, queueType);
+        MetricsService.trackError('matching', 'session_creation_failed');
+        return;
+      }
+
+      // Publish match event so socket handlers can emit to the actual sockets
+      await RedisService.publish(REDIS_CHANNELS.MATCH_FOUND, {
+        sessionId: session.id,
+        user1Id: user1.userId,
+        user1SocketId: user1.socketId,
+        user2Id: partner.userId,
+        user2SocketId: partner.socketId,
+        sessionType: queueType,
+      });
+
+      MetricsService.trackQueueLeave(queueType, 'matched');
+      logger.info(
+        `PairingEngine matched: ${user1.userId} <-> ${partner.userId} | session ${session.id} | ${queueType}`
+      );
     } catch (error) {
       logger.error('Error matching oldest users:', error);
     }
