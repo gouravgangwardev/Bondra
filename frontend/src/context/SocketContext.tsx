@@ -72,7 +72,7 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
     newSocket.on('disconnect', handleDisconnect);
     newSocket.on('connect_error', handleConnectError);
     newSocket.on('error', handleError);
-    newSocket.on('presence:online-count', handleOnlineCount);
+    newSocket.on('user:count', handleOnlineCount); // backend emits WS_EVENTS.USER_COUNT = 'user:count'
 
     // Cleanup on unmount or auth change
     return () => {
@@ -80,7 +80,7 @@ export const SocketProvider: React.FC<SocketProviderProps> = ({ children }) => {
       newSocket.off('disconnect', handleDisconnect);
       newSocket.off('connect_error', handleConnectError);
       newSocket.off('error', handleError);
-      newSocket.off('presence:online-count', handleOnlineCount);
+      newSocket.off('user:count', handleOnlineCount);
       
       socketService.disconnect();
       setSocket(null);
