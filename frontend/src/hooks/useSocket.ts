@@ -19,7 +19,7 @@ interface UseSocketReturn {
   off: (event: string, callback?: (...args: any[]) => void) => void;
 }
 
-const SOCKET_URL = process.env.REACT_APP_ || 'http://localhost:3000';
+import { SOCKET_URL } from '../utils/constants';
 
 export const useSocket = (options: UseSocketOptions = {}): UseSocketReturn => {
   const {
@@ -145,7 +145,7 @@ export const useSocketEvent = (
 export const usePresence = (socket: Socket | null) => {
   const [onlineCount, setOnlineCount] = useState(0);
 
-  useSocketEvent(socket, 'presence:online-count', (count: number) => {
+  useSocketEvent(socket, 'user:count', (count: number) => {
     setOnlineCount(count);
   });
 
