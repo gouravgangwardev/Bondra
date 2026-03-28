@@ -1,6 +1,4 @@
-// ============================================
-// FILE 5: src/websocket/handlers/chatHandler.ts
-// ============================================
+// src/websocket/handlers/chatHandler.ts
 import { Server, Socket } from 'socket.io';
 import { WSEvents, ChatMessagePayload } from '../types/events';
 import { SocketManager } from '../socketManager';
@@ -11,7 +9,7 @@ import { MetricsService } from '../../config/monitoring';
 export const setupChatHandler = (io: Server, socket: Socket, socketManager: SocketManager) => {
   const { userId } = socket.data;
 
-  // Handle chat message
+  // Chat message
   socket.on(WSEvents.CHAT_MESSAGE, async (payload: ChatMessagePayload) => {
     try {
       const { message } = payload;
@@ -26,32 +24,31 @@ export const setupChatHandler = (io: Server, socket: Socket, socketManager: Sock
         return;
       }
 
-      // Get partner from active session
       const partnerId = await sessionManager.getSessionPartner(userId);
-
       if (!partnerId) {
         socket.emit(WSEvents.ERROR, { message: 'No active session' });
         return;
       }
 
-      // Send message to partner
-      socketManager.emitToUser(partnerId, WSEvents.CHAT_MESSAGE, {
-        message,
+      const outgoing = {
+        message: message.trim(),
         timestamp: Date.now(),
         senderId: userId,
-      });
+      };
 
-      // Update metrics
+      // Echo to sender so they get the server timestamp
+      socket.emit(WSEvents.CHAT_MESSAGE, outgoing);
+      socketManager.emitToUser(partnerId, WSEvents.CHAT_MESSAGE, outgoing);
+
       MetricsService.messagesSent.labels('random').inc();
-
-      logger.debug(`Message sent from ${userId} to ${partnerId}`);
+      logger.debug(`Message: ${userId} → ${partnerId}`);
     } catch (error) {
       logger.error('Error handling chat message:', error);
       socket.emit(WSEvents.ERROR, { message: 'Failed to send message' });
     }
   });
 
-  // Handle typing indicator
+  // Typing indicator
   socket.on(WSEvents.CHAT_TYPING, async () => {
     try {
       const partnerId = await sessionManager.getSessionPartner(userId);
@@ -63,7 +60,7 @@ export const setupChatHandler = (io: Server, socket: Socket, socketManager: Sock
     }
   });
 
-  // Handle stop typing indicator
+  // Stop typing
   socket.on(WSEvents.CHAT_STOP_TYPING, async () => {
     try {
       const partnerId = await sessionManager.getSessionPartner(userId);
