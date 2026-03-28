@@ -38,7 +38,7 @@ interface UseAuthReturn extends AuthState {
   clearError: () => void;
 }
 
-const API_BASE_URL = process.env.REACT_APP_ || 'http://localhost:3000/api/v1';
+import { API_BASE_URL } from '../utils/constants';
 
 export const useAuth = (): UseAuthReturn => {
   const [state, setState] = useState<AuthState>({
