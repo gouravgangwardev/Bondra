@@ -1,92 +1,113 @@
-// ============================================
-// FILE 4: src/websocket/socketManager.ts
-// ============================================
+// src/websocket/socketManager.ts
 import { Server, Socket } from 'socket.io';
 import { logger } from '../utils/logger';
+import { redisClient } from '../config/redis';
 import presenceTracker from '../services/friends/presenceTracker';
 import { SocketData } from './types/events';
 
+// Redis key: HSET socket:user:{userId}  {socketId} "1"
+const userSocketsKey = (userId: string) => `socket:user:${userId}`;
+
 export class SocketManager {
   private io: Server;
-  private userSockets: Map<string, Set<string>> = new Map();
 
   constructor(io: Server) {
     this.io = io;
   }
 
-  // Register socket for user
+  // Register socket for user — stored in Redis so all nodes see it
   async registerSocket(socket: Socket): Promise<void> {
     const { userId } = socket.data as SocketData;
 
-    if (!this.userSockets.has(userId)) {
-      this.userSockets.set(userId, new Set());
+    try {
+      // HSET with 30-minute TTL so stale entries self-expire
+      await redisClient.hset(userSocketsKey(userId), socket.id, '1');
+      await redisClient.expire(userSocketsKey(userId), 1800);
+    } catch (err) {
+      logger.error(`registerSocket Redis error for ${userId}:`, err);
     }
 
-    this.userSockets.get(userId)!.add(socket.id);
-
-    // Set user online
     await presenceTracker.setUserOnline(userId, socket.id);
-
     logger.debug(`Socket registered for user ${userId}: ${socket.id}`);
   }
 
-  // Unregister socket for user
+  // Unregister socket — clean up Redis entry
   async unregisterSocket(socket: Socket): Promise<void> {
     const { userId } = socket.data as SocketData;
 
-    const userSocketSet = this.userSockets.get(userId);
-    if (userSocketSet) {
-      userSocketSet.delete(socket.id);
-
-      if (userSocketSet.size === 0) {
-        this.userSockets.delete(userId);
-        // Set user offline
+    try {
+      await redisClient.hdel(userSocketsKey(userId), socket.id);
+      const remaining = await redisClient.hlen(userSocketsKey(userId));
+      if (remaining === 0) {
+        await redisClient.del(userSocketsKey(userId));
         await presenceTracker.setUserOffline(userId);
       }
+    } catch (err) {
+      logger.error(`unregisterSocket Redis error for ${userId}:`, err);
     }
 
     logger.debug(`Socket unregistered for user ${userId}: ${socket.id}`);
   }
 
-  // Get all sockets for user
+  // Get all socket IDs for a user across ALL nodes
+  async getUserSocketsAsync(userId: string): Promise<string[]> {
+    try {
+      const map = await redisClient.hgetall(userSocketsKey(userId));
+      return map ? Object.keys(map) : [];
+    } catch (err) {
+      logger.error(`getUserSockets Redis error for ${userId}:`, err);
+      return [];
+    }
+  }
+
+  // Sync helper kept for backward-compat callers — returns empty, prefer emitToUser
   getUserSockets(userId: string): string[] {
-    return Array.from(this.userSockets.get(userId) || []);
+    // Cannot do synchronous Redis lookup; callers should use emitToUser instead.
+    return [];
   }
 
-  // Check if user is connected
-  isUserConnected(userId: string): boolean {
-    return this.userSockets.has(userId) && this.userSockets.get(userId)!.size > 0;
+  // Check if user is connected (at least one live socket in Redis)
+  async isUserConnected(userId: string): Promise<boolean> {
+    try {
+      const count = await redisClient.hlen(userSocketsKey(userId));
+      return count > 0;
+    } catch {
+      return false;
+    }
   }
 
-  // Emit to user (all their sockets)
+  // Emit to ALL sockets of a user across all server nodes via Socket.IO adapter
+  // With @socket.io/redis-adapter installed, io.to(socketId).emit() fans out
+  // to whichever node holds that socket automatically.
   emitToUser(userId: string, event: string, data: any): void {
-    const socketIds = this.getUserSockets(userId);
-    socketIds.forEach(socketId => {
-      this.io.to(socketId).emit(event, data);
-    });
+    // Fire-and-forget: look up socket IDs then emit via the adapter
+    redisClient.hgetall(userSocketsKey(userId))
+      .then((map) => {
+        if (!map) return;
+        Object.keys(map).forEach((socketId) => {
+          this.io.to(socketId).emit(event, data);
+        });
+      })
+      .catch((err) => {
+        logger.error(`emitToUser Redis error for ${userId}:`, err);
+      });
   }
 
-  // Emit to specific socket
+  // Emit to a specific socket ID
   emitToSocket(socketId: string, event: string, data: any): void {
     this.io.to(socketId).emit(event, data);
   }
 
-  // Get connection count
+  // Total live connections on THIS node
   getConnectionCount(): number {
     return this.io.sockets.sockets.size;
   }
 
-  // Get user count
-  getUserCount(): number {
-    return this.userSockets.size;
-  }
-
-  // Get stats
+  // Stats for this node only
   getStats(): any {
     return {
       totalConnections: this.getConnectionCount(),
-      uniqueUsers: this.getUserCount(),
-      averageSocketsPerUser: this.getConnectionCount() / Math.max(this.getUserCount(), 1),
+      note: 'uniqueUsers is now tracked in Redis, not per-node',
     };
   }
 }
