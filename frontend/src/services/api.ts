@@ -60,8 +60,8 @@ export const authAPI = {
 };
 
 export const userAPI = {
-  getProfile: async () => {
-    const response = await fetch(`${API_BASE_URL}/users/profile`, { headers: getAuthHeaders() });
+  getProfile: async (userId: string) => {
+    const response = await fetch(`${API_BASE_URL}/users/${userId}`, { headers: getAuthHeaders() });
     return handleResponse<any>(response);
   },
 
@@ -129,20 +129,20 @@ export const friendsAPI = {
     return handleResponse<{ message: string }>(response);
   },
 
-  acceptRequest: async (requesterId: string) => {
+  acceptRequest: async (friendId: string) => {
     const response = await fetch(`${API_BASE_URL}/friends/accept`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ requesterId }),
+      body: JSON.stringify({ friendId }),
     });
     return handleResponse<{ message: string }>(response);
   },
 
-  rejectRequest: async (requesterId: string) => {
+  rejectRequest: async (friendId: string) => {
     const response = await fetch(`${API_BASE_URL}/friends/reject`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ requesterId }),
+      body: JSON.stringify({ friendId }),
     });
     return handleResponse<{ message: string }>(response);
   },
