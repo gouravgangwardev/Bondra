@@ -1,6 +1,4 @@
-// ============================================
-// FILE 1: src/websocket/wsServer.ts
-// ============================================
+// src/websocket/wsServer.ts
 import { Server as HTTPServer } from 'http';
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -9,13 +7,14 @@ import { ENV } from '../config/environment';
 import { logger } from '../utils/logger';
 import { WS_EVENTS } from '../config/constants';
 import { MetricsService } from '../config/monitoring';
+import { SocketManager } from './socketManager';
 
 // Import handlers
-import { setupChatHandlers } from './handlers/chatHandler';
-import { setupMatchHandlers } from './handlers/matchHandler';
-import { setupSignalHandlers } from './handlers/signalHandler';
-import { setupFriendHandlers } from './handlers/friendHandler';
-import { setupErrorHandlers } from './handlers/errorHandler';
+import { setupChatHandler } from './handlers/chatHandler';
+import { setupMatchHandler } from './handlers/matchHandler';
+import { setupSignalHandler } from './handlers/signalHandler';
+import { setupFriendHandler } from './handlers/friendHandler';
+import { setupErrorHandler } from './handlers/errorHandler';
 
 // Import middleware
 import { wsAuthMiddleware } from './middleware/wsAuth';
@@ -23,10 +22,10 @@ import { wsRateLimitMiddleware } from './middleware/wsRateLimit';
 
 export class WebSocketServer {
   private io: SocketIOServer;
+  private socketManager: SocketManager;
   private activeConnections: Map<string, Socket> = new Map();
 
   constructor(httpServer: HTTPServer) {
-    // Initialize Socket.IO
     this.io = new SocketIOServer(httpServer, {
       cors: {
         origin: ENV.CORS_ORIGINS,
@@ -37,9 +36,11 @@ export class WebSocketServer {
       pingTimeout: ENV.WS_PING_TIMEOUT,
       pingInterval: ENV.WS_PING_INTERVAL,
       maxHttpBufferSize: ENV.WS_MAX_BUFFER_SIZE,
-      perMessageDeflate: false, // Disable for performance
-      allowEIO3: true, // Support older clients
+      perMessageDeflate: false,
+      allowEIO3: true,
     });
+
+    this.socketManager = new SocketManager(this.io);
 
     this.setupRedisAdapter();
     this.setupMiddleware();
@@ -59,12 +60,8 @@ export class WebSocketServer {
   }
 
   private setupMiddleware(): void {
-    // Authentication middleware
     this.io.use(wsAuthMiddleware);
-
-    // Rate limiting middleware
     this.io.use(wsRateLimitMiddleware);
-
     logger.info('WebSocket middleware configured');
   }
 
@@ -75,26 +72,21 @@ export class WebSocketServer {
   }
 
   private handleConnection(socket: Socket): void {
-    const userId = (socket as any).userId;
-    const username = (socket as any).username;
+    const userId = socket.data.userId;
+    const username = socket.data.username;
 
     logger.info(`WebSocket connected: ${socket.id} (User: ${username})`);
 
-    // Store connection
     this.activeConnections.set(socket.id, socket);
-
-    // Update metrics
+    this.socketManager.registerSocket(socket);
     MetricsService.trackWsConnection();
 
-    // Setup event handlers for this socket
     this.setupSocketHandlers(socket);
 
-    // Handle disconnection
     socket.on(WS_EVENTS.DISCONNECT, () => {
       this.handleDisconnection(socket);
     });
 
-    // Send connection success
     socket.emit(WS_EVENTS.AUTH_SUCCESS, {
       socketId: socket.id,
       userId,
@@ -105,13 +97,11 @@ export class WebSocketServer {
 
   private setupSocketHandlers(socket: Socket): void {
     try {
-      // Setup all handlers
-      setupChatHandlers(socket, this.io);
-      setupMatchHandlers(socket, this.io);
-      setupSignalHandlers(socket, this.io);
-      setupFriendHandlers(socket, this.io);
-      setupErrorHandlers(socket, this.io);
-
+      setupChatHandler(this.io, socket, this.socketManager);
+      setupMatchHandler(this.io, socket, this.socketManager);
+      setupSignalHandler(this.io, socket, this.socketManager);
+      setupFriendHandler(this.io, socket, this.socketManager);
+      setupErrorHandler(socket);
       logger.debug(`Handlers setup for socket: ${socket.id}`);
     } catch (error) {
       logger.error('Error setting up socket handlers:', error);
@@ -119,35 +109,25 @@ export class WebSocketServer {
   }
 
   private handleDisconnection(socket: Socket): void {
-    const userId = (socket as any).userId;
-    const username = (socket as any).username;
+    const userId = socket.data.userId;
+    const username = socket.data.username;
 
     logger.info(`WebSocket disconnected: ${socket.id} (User: ${username})`);
 
-    // Remove connection
     this.activeConnections.delete(socket.id);
-
-    // Update metrics
+    this.socketManager.unregisterSocket(socket);
     MetricsService.trackWsDisconnection('normal');
-
-    // Cleanup user session, queue, etc.
     this.cleanupUserSession(userId);
   }
 
   private async cleanupUserSession(userId: string): Promise<void> {
     try {
-      // Import services dynamically to avoid circular dependencies
       const queueManager = (await import('../services/matching/queueManager')).default;
       const sessionManager = (await import('../services/matching/sessionManager')).default;
       const presenceTracker = (await import('../services/friends/presenceTracker')).default;
 
-      // Remove from queues
       await queueManager.removeFromAllQueues(userId);
-
-      // End active session
       await sessionManager.endSessionForUser(userId);
-
-      // Update presence
       await presenceTracker.setUserOffline(userId);
 
       logger.debug(`Cleaned up session for user: ${userId}`);
@@ -166,11 +146,7 @@ export class WebSocketServer {
 
   public async close(): Promise<void> {
     logger.info('Closing WebSocket server...');
-    
-    // Disconnect all clients
     this.io.disconnectSockets();
-    
-    // Close server
     await new Promise<void>((resolve) => {
       this.io.close(() => {
         logger.info('WebSocket server closed');
