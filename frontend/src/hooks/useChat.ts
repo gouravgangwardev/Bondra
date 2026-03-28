@@ -1,13 +1,15 @@
 // src/hooks/useChat.ts
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Socket } from 'socket.io-client';
-import { Message, MessageStatus } from '../components/chat/MessageBubble';
+import { Message } from '../components/chat/MessageBubble';
 import { QueueType } from '../components/matching/QueueStatus';
+import { SOCKET_EVENTS } from '../utils/constants';
 
 interface MatchedUser {
   id: string;
   username: string;
   avatar?: string | null;
+  role?: 'caller' | 'callee'; // tells useWebRTC who creates the offer
 }
 
 interface UseChatOptions {
@@ -17,103 +19,104 @@ interface UseChatOptions {
 
 interface UseChatReturn {
   // Matching state
-  isSearching: boolean;
-  matchedUser: MatchedUser | null;
-  sessionId: string | null;
-  estimatedWaitTime: number;
-  
+  isSearching:       boolean;
+  matchedUser:       MatchedUser | null;
+  sessionId:         string | null;
+  queuePosition:     number;
+
   // Chat state
-  messages: Message[];
-  isPartnerTyping: boolean;
-  isConnected: boolean;
-  
+  messages:          Message[];
+  isPartnerTyping:   boolean;
+  isConnected:       boolean;
+
   // Actions
-  startMatching: (mode: QueueType) => void;
+  startMatching:  (mode: QueueType) => void;
   cancelMatching: () => void;
-  sendMessage: (content: string) => void;
-  sendTyping: (isTyping: boolean) => void;
-  skipPartner: () => void;
-  endSession: () => void;
-  reportUser: (reason: string) => void;
-  addReaction: (messageId: string, emoji: string) => void;
+  sendMessage:    (content: string) => void;
+  sendTyping:     (isTyping: boolean) => void;
+  skipPartner:    () => void;
+  endSession:     () => void;
+  reportUser:     (reason: string, description?: string) => void;
 }
 
-export const useChat = (options: UseChatOptions): UseChatReturn => {
-  const { socket, userId } = options;
-
-  // Matching state
-  const [isSearching, setIsSearching] = useState(false);
-  const [matchedUser, setMatchedUser] = useState<MatchedUser | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [estimatedWaitTime, setEstimatedWaitTime] = useState(0);
-
-  // Chat state
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
+export const useChat = ({ socket, userId }: UseChatOptions): UseChatReturn => {
+  const [isSearching,     setIsSearching]     = useState(false);
+  const [matchedUser,     setMatchedUser]      = useState<MatchedUser | null>(null);
+  const [sessionId,       setSessionId]        = useState<string | null>(null);
+  const [queuePosition,   setQueuePosition]    = useState(0);
+  const [messages,        setMessages]         = useState<Message[]>([]);
+  const [isPartnerTyping, setIsPartnerTyping]  = useState(false);
+  const [isConnected,     setIsConnected]      = useState(false);
 
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const stopTypingTimer  = useRef<ReturnType<typeof setTimeout>>();
+  const currentModeRef   = useRef<QueueType | null>(null);
 
-  // Start matching
+  // ── Actions ────────────────────────────────────────────────────────────────
+
   const startMatching = useCallback((mode: QueueType) => {
     if (!socket || isSearching) return;
-
+    currentModeRef.current = mode;
     setIsSearching(true);
     setMessages([]);
-    socket.emit('matching:join-queue', { type: mode });
+    // backend event: queue:join  payload: { type }
+    socket.emit(SOCKET_EVENTS.QUEUE_JOIN, { type: mode });
   }, [socket, isSearching]);
 
-  // Cancel matching
   const cancelMatching = useCallback(() => {
     if (!socket) return;
-
-    socket.emit('matching:leave-queue');
+    // backend event: queue:leave  payload: { type }
+    socket.emit(SOCKET_EVENTS.QUEUE_LEAVE, { type: currentModeRef.current });
     setIsSearching(false);
+    setQueuePosition(0);
   }, [socket]);
 
-  // Send message
   const sendMessage = useCallback((content: string) => {
     if (!socket || !sessionId || !userId) return;
 
     const tempMessage: Message = {
-      id: `temp-${Date.now()}`,
+      id:        `temp-${Date.now()}`,
       content,
-      senderId: userId,
+      senderId:  userId,
       timestamp: new Date(),
-      status: 'sending',
+      status:    'sending',
     };
-
     setMessages(prev => [...prev, tempMessage]);
 
-    socket.emit('chat:send-message', {
-      sessionId,
-      content,
-    });
+    // backend event: chat:message  payload: { message }
+    socket.emit(SOCKET_EVENTS.CHAT_MESSAGE, { message: content });
   }, [socket, sessionId, userId]);
 
-  // Send typing indicator
   const sendTyping = useCallback((isTyping: boolean) => {
     if (!socket || !sessionId) return;
+    clearTimeout(stopTypingTimer.current);
 
-    socket.emit('chat:typing', { sessionId, isTyping });
+    if (isTyping) {
+      socket.emit(SOCKET_EVENTS.CHAT_TYPING);
+      // auto stop-typing after 3 s so partner indicator clears
+      stopTypingTimer.current = setTimeout(() => {
+        socket.emit(SOCKET_EVENTS.CHAT_STOP_TYPING);
+      }, 3000);
+    } else {
+      socket.emit(SOCKET_EVENTS.CHAT_STOP_TYPING);
+    }
   }, [socket, sessionId]);
 
-  // Skip to next partner
   const skipPartner = useCallback(() => {
-    if (!socket || !sessionId) return;
-
-    socket.emit('chat:skip', { sessionId });
+    if (!socket) return;
+    // backend event: match:next  — re-queues for same mode
+    socket.emit(SOCKET_EVENTS.MATCH_NEXT);
     setMessages([]);
     setMatchedUser(null);
     setSessionId(null);
     setIsConnected(false);
-  }, [socket, sessionId]);
+    setIsSearching(true); // still searching after skip
+  }, [socket]);
 
-  // End session
   const endSession = useCallback(() => {
     if (!socket || !sessionId) return;
-
-    socket.emit('chat:end-session', { sessionId });
+    // backend event: call:end  payload: { sessionId }
+    socket.emit(SOCKET_EVENTS.CALL_END, { sessionId });
     setMessages([]);
     setMatchedUser(null);
     setSessionId(null);
@@ -121,175 +124,160 @@ export const useChat = (options: UseChatOptions): UseChatReturn => {
     setIsSearching(false);
   }, [socket, sessionId]);
 
-  // Report user
-  const reportUser = useCallback((reason: string) => {
+  const reportUser = useCallback((reason: string, description?: string) => {
     if (!socket || !sessionId || !matchedUser) return;
-
-    socket.emit('chat:report', {
-      sessionId,
+    socket.emit(SOCKET_EVENTS.REPORT_USER, {
       reportedUserId: matchedUser.id,
+      sessionId,
       reason,
+      description,
     });
   }, [socket, sessionId, matchedUser]);
 
-  // Add reaction to message
-  const addReaction = useCallback((messageId: string, emoji: string) => {
-    if (!socket || !sessionId) return;
+  // ── Socket event listeners ─────────────────────────────────────────────────
 
-    socket.emit('chat:react', {
-      sessionId,
-      messageId,
-      emoji,
-    });
-  }, [socket, sessionId]);
-
-  // Socket event listeners
   useEffect(() => {
     if (!socket) return;
 
-    // Queue events
-    socket.on('matching:queue-update', (data: { position: number; estimatedWaitTime: number }) => {
-      setEstimatedWaitTime(data.estimatedWaitTime);
-    });
+    // ── Queue feedback ────────────────────────────────────────────────────────
+    const onQueuePosition = (data: { position: number }) => {
+      setQueuePosition(data.position);
+    };
 
-    socket.on('matching:matched', (data: { sessionId: string; partner: MatchedUser }) => {
-      console.log('Matched with:', data.partner);
+    // ── Match found ──────────────────────────────────────────────────────────
+    // backend emits: match:found  { sessionId, partnerId, partnerUsername, sessionType, role }
+    const onMatchFound = (data: {
+      sessionId:       string;
+      partnerId:       string;
+      partnerUsername: string;
+      sessionType:     string;
+      role:            'caller' | 'callee';
+    }) => {
       setIsSearching(false);
+      setQueuePosition(0);
       setSessionId(data.sessionId);
-      setMatchedUser(data.partner);
+      setMatchedUser({
+        id:       data.partnerId,
+        username: data.partnerUsername,
+        avatar:   null,
+        role:     data.role,
+      });
       setIsConnected(true);
-      setMessages([
-        {
-          id: 'system-connected',
-          content: `You are now connected with ${data.partner.username}`,
-          senderId: 'system',
-          timestamp: new Date(),
-          type: 'system',
-        },
-      ]);
-    });
+      setMessages([{
+        id:        'system-connected',
+        content:   `You are now connected with ${data.partnerUsername}`,
+        senderId:  'system',
+        timestamp: new Date(),
+        type:      'system',
+      } as Message]);
+    };
 
-    socket.on('matching:no-match', () => {
-      setIsSearching(false);
-      setEstimatedWaitTime(0);
-    });
-
-    // Chat events
-    socket.on('chat:message', (data: { messageId: string; content: string; senderId: string; timestamp: string }) => {
-      const newMessage: Message = {
-        id: data.messageId,
-        content: data.content,
-        senderId: data.senderId,
-        senderName: data.senderId === userId ? 'You' : matchedUser?.username,
-        timestamp: new Date(data.timestamp),
-        status: 'delivered',
-      };
-
-      setMessages(prev => [...prev, newMessage]);
-    });
-
-    socket.on('chat:message-sent', (data: { tempId: string; messageId: string; timestamp: string }) => {
-      setMessages(prev =>
-        prev.map(msg =>
-          msg.id === data.tempId
-            ? { ...msg, id: data.messageId, timestamp: new Date(data.timestamp), status: 'sent' }
-            : msg
-        )
-      );
-    });
-
-    socket.on('chat:message-delivered', (data: { messageId: string }) => {
-      setMessages(prev =>
-        prev.map(msg =>
-          msg.id === data.messageId ? { ...msg, status: 'delivered' } : msg
-        )
-      );
-    });
-
-    socket.on('chat:message-read', (data: { messageId: string }) => {
-      setMessages(prev =>
-        prev.map(msg =>
-          msg.id === data.messageId ? { ...msg, status: 'read' } : msg
-        )
-      );
-    });
-
-    socket.on('chat:typing', (data: { isTyping: boolean }) => {
-      setIsPartnerTyping(data.isTyping);
-
-      if (data.isTyping) {
-        clearTimeout(typingTimeoutRef.current);
-        typingTimeoutRef.current = setTimeout(() => {
-          setIsPartnerTyping(false);
-        }, 3000);
-      }
-    });
-
-    socket.on('chat:reaction', (data: { messageId: string; emoji: string; userId: string }) => {
-      setMessages(prev =>
-        prev.map(msg => {
-          if (msg.id === data.messageId) {
-            const reactions = { ...msg.reactions };
-            reactions[data.emoji] = (reactions[data.emoji] || 0) + 1;
-            return { ...msg, reactions };
-          }
-          return msg;
-        })
-      );
-    });
-
-    socket.on('chat:partner-disconnected', () => {
-      setMessages(prev => [
-        ...prev,
-        {
-          id: `system-${Date.now()}`,
-          content: 'Your partner has disconnected',
-          senderId: 'system',
-          timestamp: new Date(),
-          type: 'system',
-        },
-      ]);
+    // ── Partner disconnected / skipped ────────────────────────────────────────
+    // backend emits: match:disconnected  { reason }
+    const onMatchDisconnected = (data: { reason: string }) => {
       setIsConnected(false);
-    });
-
-    socket.on('chat:session-ended', () => {
       setMessages(prev => [
         ...prev,
         {
-          id: `system-${Date.now()}`,
-          content: 'Chat session ended',
-          senderId: 'system',
+          id:        `system-${Date.now()}`,
+          content:   data.reason === 'partner_skipped'
+            ? 'Your partner clicked Next'
+            : 'Your partner has disconnected',
+          senderId:  'system',
           timestamp: new Date(),
-          type: 'system',
-        },
+          type:      'system',
+        } as Message,
       ]);
+    };
+
+    // ── Incoming chat message ─────────────────────────────────────────────────
+    // backend emits: chat:message  { message, timestamp, senderId }
+    const onChatMessage = (data: { message: string; timestamp: number; senderId: string }) => {
+      // replace the temp optimistic message if this came from us, otherwise add
+      setMessages(prev => {
+        if (data.senderId === userId) {
+          // replace oldest 'sending' temp message with confirmed one
+          const idx = prev.findIndex(m => m.status === 'sending');
+          if (idx !== -1) {
+            const updated = [...prev];
+            updated[idx] = {
+              ...updated[idx],
+              id:        `msg-${data.timestamp}`,
+              timestamp: new Date(data.timestamp),
+              status:    'delivered',
+            };
+            return updated;
+          }
+        }
+        return [
+          ...prev,
+          {
+            id:        `msg-${data.timestamp}-${data.senderId}`,
+            content:   data.message,
+            senderId:  data.senderId,
+            timestamp: new Date(data.timestamp),
+            status:    'delivered',
+          } as Message,
+        ];
+      });
+    };
+
+    // ── Typing indicators ─────────────────────────────────────────────────────
+    const onTyping = () => {
+      setIsPartnerTyping(true);
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => setIsPartnerTyping(false), 3000);
+    };
+
+    const onStopTyping = () => {
+      clearTimeout(typingTimeoutRef.current);
+      setIsPartnerTyping(false);
+    };
+
+    // ── Call ended by partner ─────────────────────────────────────────────────
+    const onCallEnd = () => {
       setIsConnected(false);
       setSessionId(null);
       setMatchedUser(null);
-    });
-
-    // Cleanup
-    return () => {
-      socket.off('matching:queue-update');
-      socket.off('matching:matched');
-      socket.off('matching:no-match');
-      socket.off('chat:message');
-      socket.off('chat:message-sent');
-      socket.off('chat:message-delivered');
-      socket.off('chat:message-read');
-      socket.off('chat:typing');
-      socket.off('chat:reaction');
-      socket.off('chat:partner-disconnected');
-      socket.off('chat:session-ended');
-      clearTimeout(typingTimeoutRef.current);
+      setMessages(prev => [
+        ...prev,
+        {
+          id:        `system-${Date.now()}`,
+          content:   'Chat session ended',
+          senderId:  'system',
+          timestamp: new Date(),
+          type:      'system',
+        } as Message,
+      ]);
     };
-  }, [socket, userId, matchedUser]);
+
+    // Register
+    socket.on(SOCKET_EVENTS.QUEUE_POSITION,      onQueuePosition);
+    socket.on(SOCKET_EVENTS.MATCH_FOUND,         onMatchFound);
+    socket.on(SOCKET_EVENTS.MATCH_DISCONNECTED,  onMatchDisconnected);
+    socket.on(SOCKET_EVENTS.CHAT_MESSAGE,        onChatMessage);
+    socket.on(SOCKET_EVENTS.CHAT_TYPING,         onTyping);
+    socket.on(SOCKET_EVENTS.CHAT_STOP_TYPING,    onStopTyping);
+    socket.on(SOCKET_EVENTS.CALL_END,            onCallEnd);
+
+    return () => {
+      socket.off(SOCKET_EVENTS.QUEUE_POSITION,     onQueuePosition);
+      socket.off(SOCKET_EVENTS.MATCH_FOUND,        onMatchFound);
+      socket.off(SOCKET_EVENTS.MATCH_DISCONNECTED, onMatchDisconnected);
+      socket.off(SOCKET_EVENTS.CHAT_MESSAGE,       onChatMessage);
+      socket.off(SOCKET_EVENTS.CHAT_TYPING,        onTyping);
+      socket.off(SOCKET_EVENTS.CHAT_STOP_TYPING,   onStopTyping);
+      socket.off(SOCKET_EVENTS.CALL_END,           onCallEnd);
+      clearTimeout(typingTimeoutRef.current);
+      clearTimeout(stopTypingTimer.current);
+    };
+  }, [socket, userId]);
 
   return {
     isSearching,
     matchedUser,
     sessionId,
-    estimatedWaitTime,
+    queuePosition,
     messages,
     isPartnerTyping,
     isConnected,
@@ -300,6 +288,5 @@ export const useChat = (options: UseChatOptions): UseChatReturn => {
     skipPartner,
     endSession,
     reportUser,
-    addReaction,
   };
 };
