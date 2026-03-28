@@ -119,13 +119,14 @@ class App {
     this.app.post(`${API_PREFIX}/auth/logout`, AuthController.logout);
     this.app.post(`${API_PREFIX}/auth/verify`, AuthController.verifyToken);
 
-    // User routes (search / active-count / check-username are public)
+    // User routes — static/named routes MUST come before /:userId wildcard
     this.app.get(`${API_PREFIX}/users/search`, UserController.searchUsers);
     this.app.get(`${API_PREFIX}/users/active-count`, UserController.getActiveUsersCount);
     this.app.get(`${API_PREFIX}/users/check-username`, UserController.checkUsername);
-    this.app.get(`${API_PREFIX}/users/:userId`, authMiddleware, UserController.getUserProfile);
-    this.app.put(`${API_PREFIX}/users/profile`, authMiddleware, UserController.updateProfile);
     this.app.get(`${API_PREFIX}/users/stats`, authMiddleware, UserController.getUserStats);
+    this.app.put(`${API_PREFIX}/users/profile`, authMiddleware, UserController.updateProfile);
+    // Wildcard param route must be last so it doesn't swallow the static routes above
+    this.app.get(`${API_PREFIX}/users/:userId`, authMiddleware, UserController.getUserProfile);
 
     // Friend routes (all protected)
     this.app.post(`${API_PREFIX}/friends/request`, authMiddleware, FriendController.sendFriendRequest);
