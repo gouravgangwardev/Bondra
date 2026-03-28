@@ -1,170 +1,124 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import VideoChat from '../components/chat/VideoChat';
-import { Message } from '../components/chat/MessageBubble';
+import { useAuthContext } from '../context/AuthContext';
+import { useSocketContext } from '../context/SocketContext';
+import { useChat } from '../hooks/useChat';
+import { useWebRTC } from '../hooks/useWebRTC';
 
-interface Partner {
-  id: string;
-  name: string;
-  avatar?: string;
-}
+type ChatMode = 'video' | 'audio' | 'text';
 
 const Chat: React.FC = () => {
-  /* ================= STATE ================= */
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // Auth & socket from context — no more hardcoded URLs or mock logic
+  const { user } = useAuthContext();
+  const { socket, isConnected: socketConnected } = useSocketContext();
 
-  const [isConnected, setIsConnected] = useState(false);
-  const [isConnecting, setIsConnecting] = useState(false);
+  // Determine mode from URL param, default to video
+  const modeParam = searchParams.get('mode') as ChatMode | null;
+  const mode: ChatMode =
+    modeParam && ['video', 'audio', 'text'].includes(modeParam) ? modeParam : 'video';
 
-  const [isMuted, setIsMuted] = useState(false);
-  const [isVideoOff, setIsVideoOff] = useState(false);
+  // ── Chat matching + messaging ──────────────────────────────────────────────
+  const {
+    isSearching,
+    matchedUser,
+    sessionId,
+    messages,
+    isPartnerTyping,
+    isConnected,
+    startMatching,
+    sendMessage,
+    sendTyping,
+    skipPartner,
+    endSession,
+  } = useChat({ socket, userId: user?.id });
 
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [partnerTyping, setPartnerTyping] = useState(false);
+  // ── WebRTC (video / audio modes only) ─────────────────────────────────────
+  const {
+    localStream,
+    remoteStream,
+    isMuted,
+    isVideoOff,
+    isConnecting: rtcConnecting,
+    error: rtcError,
+    startMedia,
+    stopMedia,
+    toggleMute,
+    toggleVideo,
+  } = useWebRTC({
+    socket,
+    sessionId: sessionId ?? undefined,
+    mode: mode === 'text' ? 'audio' : mode,
+    role: matchedUser?.role ?? 'caller',
+  });
 
-  const [partner, setPartner] = useState<Partner | undefined>();
+  // ── Connection timer ───────────────────────────────────────────────────────
   const [connectionTime, setConnectionTime] = useState(0);
-
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const currentUserId = 'me'; // Replace with auth user ID
-
-  /* ================= MEDIA INIT ================= */
-
   useEffect(() => {
-    const initMedia = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: true,
-        });
-
-        setLocalStream(stream);
-      } catch (error) {
-        console.error('Media access denied:', error);
-      }
-    };
-
-    initMedia();
-
-    return () => {
-      localStream?.getTracks().forEach(track => track.stop());
-    };
-  }, []);
-
-  /* ================= CONNECTION TIMER ================= */
-
-  useEffect(() => {
-    if (isConnected) {
-      timerRef.current = setInterval(() => {
-        setConnectionTime(prev => prev + 1);
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-      setConnectionTime(0);
-    }
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    if (!isConnected) { setConnectionTime(0); return; }
+    const t = setInterval(() => setConnectionTime(s => s + 1), 1000);
+    return () => clearInterval(t);
   }, [isConnected]);
 
-  /* ================= ACTIONS ================= */
-
-  const handleToggleMute = () => {
-    if (!localStream) return;
-
-    localStream.getAudioTracks().forEach(track => {
-      track.enabled = isMuted;
-    });
-
-    setIsMuted(prev => !prev);
-  };
-
-  const handleToggleVideo = () => {
-    if (!localStream) return;
-
-    localStream.getVideoTracks().forEach(track => {
-      track.enabled = isVideoOff;
-    });
-
-    setIsVideoOff(prev => !prev);
-  };
-
-  const handleEndChat = () => {
-    setIsConnected(false);
-    setRemoteStream(null);
-    setMessages([]);
-    setPartner(undefined);
-  };
-
-  const handleSkip = () => {
-    handleEndChat();
-    simulateConnection();
-  };
-
-  const handleSendMessage = (text: string) => {
-    const newMessage: Message = {
-      id: crypto.randomUUID(),
-      senderId: currentUserId,
-      content: text,
-      timestamp: new Date(), // IMPORTANT: must be Date
-    };
-
-    setMessages(prev => [...prev, newMessage]);
-  };
-
-  const handleTyping = (typing: boolean) => {
-    setPartnerTyping(typing);
-  };
-
-  /* ================= MOCK CONNECTION (REMOVE IN PROD) ================= */
-
-  const simulateConnection = () => {
-    setIsConnecting(true);
-
-    setTimeout(() => {
-      setIsConnecting(false);
-      setIsConnected(true);
-
-      setPartner({
-        id: 'user-2',
-        name: 'Stranger',
-      });
-
-      // Simulated remote stream (replace with real WebRTC)
-      setRemoteStream(localStream);
-    }, 2000);
-  };
-
+  // ── Start media + matching once socket is ready ────────────────────────────
   useEffect(() => {
-    simulateConnection();
-  }, []);
+    if (!socketConnected) return;
+    const run = async () => {
+      if (mode !== 'text') await startMedia();
+      startMatching(mode);
+    };
+    run();
+    return () => { stopMedia(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [socketConnected]);
 
-  /* ================= RENDER ================= */
+  // ── Redirect if not logged in ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!user) navigate('/', { replace: true });
+  }, [user, navigate]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleSkip = () => skipPartner();
+
+  const handleEndCall = () => {
+    endSession();
+    stopMedia();
+    navigate('/dashboard');
+  };
+
+  const partner = matchedUser
+    ? { id: matchedUser.id, name: matchedUser.username, avatar: matchedUser.avatar ?? undefined }
+    : undefined;
 
   return (
     <div className="w-screen h-screen bg-black">
+      {rtcError && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-red-600 text-white px-4 py-2 rounded-lg text-sm shadow-lg">
+          {rtcError}
+        </div>
+      )}
       <VideoChat
         localStream={localStream}
         remoteStream={remoteStream}
-        currentUserId={currentUserId}
+        currentUserId={user?.id ?? 'me'}
         partner={partner}
         messages={messages}
         isConnected={isConnected}
-        isConnecting={isConnecting}
+        isConnecting={isSearching || rtcConnecting}
         isMuted={isMuted}
         isVideoOff={isVideoOff}
         partnerMuted={false}
         partnerVideoOff={false}
-        onToggleMute={handleToggleMute}
-        onToggleVideo={handleToggleVideo}
-        onEndCall={handleEndChat}
+        onToggleMute={toggleMute}
+        onToggleVideo={toggleVideo}
+        onEndCall={handleEndCall}
         onSkip={handleSkip}
-        onSendMessage={handleSendMessage}
-        onTyping={handleTyping}
-        partnerTyping={partnerTyping}
+        onSendMessage={sendMessage}
+        onTyping={sendTyping}
+        partnerTyping={isPartnerTyping}
         connectionTime={connectionTime}
       />
     </div>
