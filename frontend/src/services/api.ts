@@ -1,6 +1,5 @@
 // src/services/api.ts
-
-const API_BASE_URL = process.env.REACT_APP_ || 'http://localhost:3000/api/v1';
+import { API_BASE_URL } from '../utils/constants';
 
 const getAuthHeaders = (): HeadersInit => {
   const token = localStorage.getItem('accessToken');
@@ -62,13 +61,13 @@ export const authAPI = {
 
 export const userAPI = {
   getProfile: async () => {
-    const response = await fetch(`${API_BASE_URL}/users/me`, { headers: getAuthHeaders() });
+    const response = await fetch(`${API_BASE_URL}/users/profile`, { headers: getAuthHeaders() });
     return handleResponse<any>(response);
   },
 
   updateProfile: async (data: { username?: string; bio?: string }) => {
-    const response = await fetch(`${API_BASE_URL}/users/me`, {
-      method: 'PATCH',
+    const response = await fetch(`${API_BASE_URL}/users/profile`, {
+      method: 'PUT',
       headers: getAuthHeaders(),
       body: JSON.stringify(data),
     });
@@ -86,6 +85,18 @@ export const userAPI = {
     });
     return handleResponse<{ avatarUrl: string }>(response);
   },
+
+  getUserStats: async () => {
+    const response = await fetch(`${API_BASE_URL}/users/stats`, { headers: getAuthHeaders() });
+    return handleResponse<any>(response);
+  },
+
+  searchUsers: async (query: string) => {
+    const response = await fetch(`${API_BASE_URL}/users/search?q=${encodeURIComponent(query)}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<any[]>(response);
+  },
 };
 
 export const friendsAPI = {
@@ -94,32 +105,44 @@ export const friendsAPI = {
     return handleResponse<any[]>(response);
   },
 
-  getRequests: async () => {
-    const response = await fetch(`${API_BASE_URL}/friends/requests`, { headers: getAuthHeaders() });
+  getPendingRequests: async () => {
+    const response = await fetch(`${API_BASE_URL}/friends/pending`, { headers: getAuthHeaders() });
     return handleResponse<any[]>(response);
   },
 
-  sendRequest: async (userId: string, message?: string) => {
-    const response = await fetch(`${API_BASE_URL}/friends/requests`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({ userId, message }),
-    });
-    return handleResponse<{ requestId: string }>(response);
+  getSentRequests: async () => {
+    const response = await fetch(`${API_BASE_URL}/friends/sent`, { headers: getAuthHeaders() });
+    return handleResponse<any[]>(response);
   },
 
-  acceptRequest: async (requestId: string) => {
-    const response = await fetch(`${API_BASE_URL}/friends/requests/${requestId}/accept`, {
+  getOnlineFriends: async () => {
+    const response = await fetch(`${API_BASE_URL}/friends/online`, { headers: getAuthHeaders() });
+    return handleResponse<any[]>(response);
+  },
+
+  sendRequest: async (friendId: string) => {
+    const response = await fetch(`${API_BASE_URL}/friends/request`, {
       method: 'POST',
       headers: getAuthHeaders(),
+      body: JSON.stringify({ friendId }),
     });
     return handleResponse<{ message: string }>(response);
   },
 
-  rejectRequest: async (requestId: string) => {
-    const response = await fetch(`${API_BASE_URL}/friends/requests/${requestId}/reject`, {
+  acceptRequest: async (requesterId: string) => {
+    const response = await fetch(`${API_BASE_URL}/friends/accept`, {
       method: 'POST',
       headers: getAuthHeaders(),
+      body: JSON.stringify({ requesterId }),
+    });
+    return handleResponse<{ message: string }>(response);
+  },
+
+  rejectRequest: async (requesterId: string) => {
+    const response = await fetch(`${API_BASE_URL}/friends/reject`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ requesterId }),
     });
     return handleResponse<{ message: string }>(response);
   },
@@ -140,27 +163,47 @@ export const friendsAPI = {
     });
     return handleResponse<{ message: string }>(response);
   },
+
+  getFriendshipStatus: async (friendId: string) => {
+    const response = await fetch(`${API_BASE_URL}/friends/${friendId}/status`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<any>(response);
+  },
 };
 
-export const chatAPI = {
-  getQueueStats: async () => {
-    const response = await fetch(`${API_BASE_URL}/chat/queue-stats`, { headers: getAuthHeaders() });
-    return handleResponse<any[]>(response);
-  },
-
-  reportUser: async (data: { reportedUserId: string; sessionId: string; reason: string }) => {
-    const response = await fetch(`${API_BASE_URL}/chat/report`, {
+export const reportsAPI = {
+  submitReport: async (data: { reportedUserId: string; sessionId?: string; reason: string; description?: string }) => {
+    const response = await fetch(`${API_BASE_URL}/reports`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(data),
     });
     return handleResponse<{ message: string }>(response);
   },
+
+  getMyReports: async () => {
+    const response = await fetch(`${API_BASE_URL}/reports/my`, { headers: getAuthHeaders() });
+    return handleResponse<any[]>(response);
+  },
+};
+
+export const healthAPI = {
+  getQueueStats: async () => {
+    const response = await fetch(`${API_BASE_URL}/health/queue`);
+    return handleResponse<any>(response);
+  },
+
+  getActiveUserCount: async () => {
+    const response = await fetch(`${API_BASE_URL}/users/active-count`);
+    return handleResponse<{ count: number }>(response);
+  },
 };
 
 export default {
-  auth: authAPI,
-  user: userAPI,
-  friends: friendsAPI,
-  chat: chatAPI,
+  auth:     authAPI,
+  user:     userAPI,
+  friends:  friendsAPI,
+  reports:  reportsAPI,
+  health:   healthAPI,
 };
