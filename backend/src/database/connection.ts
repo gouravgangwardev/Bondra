@@ -187,6 +187,7 @@ class DatabaseConnection {
       '003_create_sessions.sql',
       '004_create_reports.sql',
       '005_add_indexes.sql',
+      '006_add_is_admin.sql',
     ];
 
     logger.info('Running database migrations...');
