@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: bondra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       random_chat
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_INITDB_ARGS: "-E UTF8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./src/database/migrations:/docker-entrypoint-initdb.d
+    networks:
+      - bondra-network
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  redis:
+    image: redis:7-alpine
+    container_name: bondra-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --protected-mode no
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - bondra-network
+    healthcheck:
+      test:     ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # coturn TURN server — required for users behind symmetric NAT
+  coturn:
+    image: coturn/coturn:latest
+    container_name: bondra-coturn
+    restart: unless-stopped
+    network_mode: host          # TURN needs direct UDP access
+    volumes:
+      - ./docker/turnserver.conf:/etc/coturn/turnserver.conf:ro
+    environment:
+      TURN_USERNAME:   "${TURN_USERNAME:-bondra}"
+      TURN_PASSWORD:   "${TURN_CREDENTIAL:-changeme}"
+    healthcheck:
+      test:     ["CMD-SHELL", "nc -uz localhost 3478 && echo OK"]
+      interval: 30s
+      timeout:  5s
+      retries:  3
+
+  app:
+    build:
+      context:    .
+      dockerfile: docker/Dockerfile
+      target:     production
+    container_name: bondra-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV:       production
+      DB_HOST:        postgres
+      REDIS_HOST:     redis
+      TURN_SERVER_URL: "turn:${PUBLIC_IP:-localhost}:3478"
+    ports:
+      - "3000:3000"
+      - "9090:9090"
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - bondra-network
+    healthcheck:
+      test:         ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval:     30s
+      timeout:      10s
+      retries:      3
+      start_period: 40s
+
+  nginx:
+    image: nginx:alpine
+    container_name: bondra-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - bondra-network
+    profiles:
+      - production
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  bondra-network:
+    driver: bridge

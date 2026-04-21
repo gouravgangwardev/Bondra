@@ -1,0 +1,120 @@
+// ============================================
+// FILE 4: tests/load/artillery.yml
+// ============================================
+# Artillery.io Load Test Configuration
+# Run with: artillery run tests/load/artillery.yml
+
+config:
+  target: "http://localhost:3000"
+  phases:
+    # Warm-up phase
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm up"
+    
+    # Ramp up phase
+    - duration: 120
+      arrivalRate: 10
+      rampTo: 50
+      name: "Ramp up load"
+    
+    # Sustained load
+    - duration: 300
+      arrivalRate: 50
+      name: "Sustained load"
+    
+    # Spike test
+    - duration: 60
+      arrivalRate: 100
+      name: "Spike"
+    
+    # Cool down
+    - duration: 60
+      arrivalRate: 10
+      name: "Cool down"
+
+  processor: "./artillery-processor.js"
+  
+  # Performance thresholds
+  ensure:
+    maxErrorRate: 1 # Max 1% error rate
+    p95: 500 # 95th percentile < 500ms
+    p99: 1000 # 99th percentile < 1000ms
+
+scenarios:
+  # Health check test
+  - name: "Health Check"
+    weight: 10
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+
+  # Guest user creation
+  - name: "Create Guest User"
+    weight: 20
+    flow:
+      - post:
+          url: "/api/v1/auth/guest"
+          json: {}
+          capture:
+            - json: "$.data.accessToken"
+              as: "token"
+          expect:
+            - statusCode: 201
+
+  # User registration
+  - name: "User Registration"
+    weight: 15
+    flow:
+      - post:
+          url: "/api/v1/auth/register"
+          json:
+            username: "user_{{ $randomString() }}"
+            email: "test_{{ $randomString() }}@example.com"
+            password: "Test1234"
+          capture:
+            - json: "$.data.accessToken"
+              as: "token"
+          expect:
+            - statusCode: 201
+
+  # Authentication flow
+  - name: "Login Flow"
+    weight: 25
+    flow:
+      # Register
+      - post:
+          url: "/api/v1/auth/register"
+          json:
+            username: "testuser_{{ $randomString() }}"
+            email: "test_{{ $randomString() }}@example.com"
+            password: "Password123"
+          capture:
+            - json: "$.data.accessToken"
+              as: "token"
+            - json: "$.data.user.username"
+              as: "username"
+      
+      # Get profile
+      - get:
+          url: "/api/v1/users/me"
+          headers:
+            Authorization: "Bearer {{ token }}"
+          expect:
+            - statusCode: 200
+
+  # Queue operations
+  - name: "Queue Join/Leave"
+    weight: 30
+    flow:
+      # Create guest
+      - post:
+          url: "/api/v1/auth/guest"
+          capture:
+            - json: "$.data.accessToken"
+              as: "token"
+      
+      # WebSocket connection would go here
+      # (Artillery requires socket.io plugin for WebSocket testing)
